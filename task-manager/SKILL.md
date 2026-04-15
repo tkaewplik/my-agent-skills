@@ -14,8 +14,38 @@ Help the user understand their current progress and next steps by reading their 
 
 ## Diary location
 
-Diaries are stored in `~/diaries/` (i.e. `/home/password/diaries/`).
+Diaries are stored in `~/diaries/` (i.e. `/home/ficha/diaries/`).
 Each file is named by date: `YYYY-MM-DD.md`.
+
+## Summary memory file
+
+A single index file at `~/diaries/SUMMARY.md` holds a one-entry-per-day digest of every diary. It is the **first place to look** whenever the user asks a historical or "do you remember…" question — grep it first, then open the specific day file(s) it points to for detail. This avoids reading every diary on every question.
+
+### Format of `SUMMARY.md`
+
+Plain markdown, newest date on top, one block per diary file:
+
+```
+## YYYY-MM-DD
+**Tags:** tag1, tag2, tag3
+**Done:** one-line digest of the day's accomplishments
+**Todo carryover:** one-line digest of what was left open
+**Keywords:** searchable terms (tools, people, files, concepts)
+```
+
+Keep each block ≤5 lines. Tags/keywords are what you grep against, so be generous with distinctive terms (library names, filenames, ticket IDs, people, error messages).
+
+### When to read `SUMMARY.md`
+- User asks about *past* work, not just today ("when did I…", "have I ever…", "what was that bug with X", "remind me about Y").
+- User asks a question whose answer likely lives in an older diary.
+- Before answering from memory or guessing — always check the index first.
+
+Workflow: `Grep` or `Read` `SUMMARY.md` → identify candidate date(s) → `Read` the specific `YYYY-MM-DD.md` files → answer.
+
+### When to update `SUMMARY.md`
+Whenever you create or modify a diary file (including the "Diary Update Feature" flow below), you MUST also update its corresponding block in `SUMMARY.md` in the same turn. If no block exists for that date, insert one at the top. If the file is missing entirely, create it.
+
+Also: if the user asks about an older diary that has no `SUMMARY.md` entry, read that diary and backfill its block before answering.
 
 ## Steps
 
@@ -61,4 +91,5 @@ When the user provides story, narrative, or information about accomplishments an
 2. Extract next steps and todos mentioned  
 3. Add these to the matching date diary file (determined by current date in context)
 4. Update both the YAML frontmatter (`done:` and `todo:` lists) and the markdown narrative sections
-5. After updating, present the updated Task Summary using the output format above
+5. **Update `~/diaries/SUMMARY.md`** — refresh (or insert) the block for that date so the index stays in sync
+6. After updating, present the updated Task Summary using the output format above
