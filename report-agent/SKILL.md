@@ -1,127 +1,155 @@
 ---
 name: report-agent
 description: >
-  Create and maintain free-form markdown reports in ~/reports/. Use this skill whenever the user
-  wants to write, update, or look up a report — e.g. "start a report on X", "add this to the HEVC
-  report", "write up the benchmark results", "make a report for Putti-san about Y", "what did I
-  write in the streaming report", "find my notes on Z". The agent reads the report index first,
-  decides whether the new information belongs in an existing report or a new one, and keeps the
-  index in sync.
+  Create and maintain free-form markdown reports under ~/agent-vault/reports/. Every report links
+  to a parent task in ~/agent-vault/tasks/ via YAML frontmatter (`task: <task-name>`). Use this
+  whenever the user wants to write, update, or look up a report — "start a report on X", "add this
+  to the HEVC report", "write up the benchmark results", "find my notes on Z". Reads reports
+  MEMORY.md first for a fast catch-up, then OVERVIEW.md, then the specific report.
 ---
 
 # Report Agent
 
-Help the user capture information into well-organized markdown reports under `~/reports/`, and retrieve from them later. Format is free — shape the report around the content the user provides, not a rigid template.
+Own the reports area of the user's vault at `~/agent-vault/reports/`. Every report is attached to a task managed by the `task-manager` skill.
 
-Reports are often **data reports**: benchmark numbers, latency measurements, throughput comparisons, before/after results, configuration matrices. These are high-value artifacts — the numbers drive real decisions, get shown to teammates, and get cited later. **Treat the data as sacred.** Transcribe it exactly as given. Never round silently, never fill missing cells with plausible-looking values, never fabricate samples, never "smooth" inconsistent entries. If a value is unclear or missing, ask the user — do not guess.
+Data reports (benchmark numbers, latency measurements, throughput comparisons, config matrices) are high-value artifacts — the numbers drive real decisions and get cited later. **Treat the data as sacred.** Transcribe verbatim. Never round silently, never fill missing cells, never fabricate samples. If a value is unclear or missing, ask the user.
 
 ## Location
 
-- Reports live in `~/reports/` (i.e. `/home/ficha/reports/`).
-- Each report is a single markdown file: `~/reports/<report_name>.md`. Use `kebab-case` names (e.g. `hevc-rtp-streaming.md`, `godot-192-fov.md`).
-- A single index file `~/reports/SUMMARY.md` lists every report with a short digest and keywords.
+```
+~/agent-vault/reports/
+├── MEMORY.md                 # ≤500 words: most recent reports, what's in flight
+├── OVERVIEW.md               # per-report index (newest-touched on top)
+└── <report-name>.md          # kebab-case, topic-describing — no dates in the name
+```
 
-## SUMMARY.md — the lookup index
+Tasks live in `~/agent-vault/tasks/ongoing/<task-name>/` and `~/agent-vault/tasks/done/<task-name>/`. Each report file's frontmatter `task:` field points to one of those.
 
-`SUMMARY.md` is the **first place to read** whenever the user asks about a report or wants to add information. Grep it to find the right file, *then* open the specific report for detail. This keeps you from reading every report on every question.
+## Report file format
 
-### Format
+Every report starts with YAML frontmatter:
 
-Plain markdown, newest-touched on top, one block per report:
+```yaml
+---
+task: <task-name>         # REQUIRED — must match an existing folder under tasks/
+task_status: ongoing      # or: done (mirrors the task's status for fast grep)
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+---
+
+# <Report Title>
+...
+```
+
+Below the frontmatter, shape the content around what the user gave — headings, tables, fenced code, Mermaid diagrams as appropriate. Free format means free *structure*, not free *quality*.
+
+## Read order — fast path first
+
+1. **`reports/MEMORY.md`** — check if the question is answerable from the last-few-reports summary.
+2. If not: **`reports/OVERVIEW.md`** — grep for topic/keyword, identify the candidate file.
+3. Open only that file.
+4. If the question is about a task's reports collectively: look at the task's `OVERVIEW.md` under `## Reports` instead.
+
+## Workflows
+
+### Adding information / creating a report
+
+1. Load `reports/MEMORY.md` (and `tasks/MEMORY.md` so you know the active task names).
+2. Decide:
+   - **Append to existing report** if topic matches → add a dated subsection `### Update — YYYY-MM-DD`.
+   - **New report** otherwise → pick a kebab-case name.
+3. **Require the `task:` link.** If the user didn't say which task:
+   - If one task is an obvious fit, propose it: "I'll attach this to `hevc-gdextension-migration` — OK?"
+   - If no task fits, ask: "Which task does this belong to?" or offer to create a new task first (and let `task-manager` handle it).
+4. Write the report (with frontmatter).
+5. Update the parent task's `OVERVIEW.md`:
+   - Add the report name to the `reports:` frontmatter list.
+   - Add a link under the `## Reports` section.
+6. Update `reports/OVERVIEW.md` — refresh (or insert at top) the block for this report, including the `**Task:**` line.
+7. Refresh `reports/MEMORY.md` — put this report at the top of "most recent".
+8. **Commit** (see Git section).
+
+### Looking up a report
+
+1. Read `reports/MEMORY.md`.
+2. If not found, grep `reports/OVERVIEW.md` (topics + keywords).
+3. Open the matching file.
+4. Answer, citing the file path so the user can open it directly.
+
+If `OVERVIEW.md` has no matching block but a report file exists, read the file and **backfill** its `OVERVIEW.md` block before answering.
+
+## OVERVIEW.md block format
 
 ```
 ## <report-name>
 **File:** `<report-name>.md`
+**Task:** [<task-name>](../tasks/ongoing/<task-name>/OVERVIEW.md)   <!-- or tasks/done/... -->
 **Created:** YYYY-MM-DD · **Updated:** YYYY-MM-DD
-**Topic:** one-sentence description of what this report is about
-**Covers:** short digest of the main sections / findings / decisions inside
-**Keywords:** searchable terms — tools, people, files, concepts, error messages
+**Topic:** one-sentence description.
+**Covers:** short digest of main sections / findings / numbers.
+**Keywords:** searchable terms — tools, people, filenames, error messages, numbers.
 ```
 
-Keep each block ≤6 lines. Be generous with distinctive keywords (library names, ticket IDs, people's names, specific numbers, filenames) — those are what you grep against later.
+Keep each block ≤6 lines. Be generous with distinctive keywords.
 
-## Workflow — adding information
+## MEMORY.md maintenance (≤500 words, HARD CAP)
 
-When the user provides information that should become a report (or extend one):
+Rebuild `reports/MEMORY.md` at the end of every invocation that wrote anything. Structure:
 
-1. **Read `~/reports/SUMMARY.md`** (create it if missing).
-2. **Decide the destination** based on the content's topic:
-   - If an existing report clearly covers this topic → append to that file.
-   - If no existing report fits → create a new `~/reports/<report-name>.md`.
-   - If unsure which of two reports fits best, ask the user briefly before writing.
-3. **Shape the content** — don't just dump raw input. Understand the context and:
-   - Pick appropriate section headings (`##`, `###`) based on what the user said.
-   - Preserve tables, code blocks, numbers, and names verbatim.
-   - Add a dated subsection (`### Update — YYYY-MM-DD`) when appending to an existing report so the timeline stays clear.
-   - For a new report, start with a `# Title` and a one-paragraph context intro before the detail.
-4. **Write / edit** the report file.
-5. **Update `SUMMARY.md`**: refresh the block for that report (bump **Updated**, extend **Covers** and **Keywords** as needed), or insert a new block at the top for a new report.
-6. **Confirm** to the user: say which file you wrote to, whether it was new or appended, and point out anything you had to guess about routing.
+```markdown
+---
+updated: YYYY-MM-DD
+---
 
-## Workflow — looking up information
+# Reports MEMORY — last updated YYYY-MM-DD
 
-When the user asks about past report content ("what did I write about…", "find my notes on…", "remind me of the numbers from…"):
+## Most recent reports
+- **<report-name>.md** (YYYY-MM-DD, task: <task-name>) — one-line summary.
 
-1. **Read or grep `SUMMARY.md` first.** Match against topics and keywords.
-2. Identify the candidate report file(s).
-3. **Open only those files** and extract the answer. Don't read every report.
-4. Answer the user, citing the file path (e.g. `~/reports/hevc-rtp-streaming.md`) so they can open it directly.
-5. If `SUMMARY.md` has no matching entry but a report file exists for the topic, read that file and **backfill** its `SUMMARY.md` block before answering.
+## Older (archived under <done-task>)
+- ...
 
-## Rules
+## What's in flight (not yet a report)
+- <thing> (task: <task-name>)
 
-- **Never overwrite** an existing report without explicit confirmation — append instead.
-- **Never invent** numbers, names, or facts. If information is missing, ask the user.
-- **Don't create a new report** just because the wording is different — prefer appending if the topic matches.
-- **Keep `SUMMARY.md` in sync on every write.** An out-of-date index defeats the purpose.
-- If `~/reports/` doesn't exist yet, create it on first use.
-- Free format means free *structure*, not free *quality* — headings, lists, tables, and code fences should still be used where they make the content clearer.
+## How to catch up fast
+- (pointers)
+```
+
+Fail loudly if it would exceed 500 words — trim older entries instead.
 
 ## Data reports — tables and charts
 
-When the user provides measurements, benchmarks, or comparisons, shape them into readable structures. Use whichever form fits the data.
+**Tables:** markdown tables for per-sample measurements. Right-align numeric columns, include units in headers, bold an **Avg** / **Total** / **Median** row only if the user provided it or it's trivial arithmetic on the exact values given.
 
-### Tables
+**Charts:**
+1. **Mermaid** fenced blocks (`xychart-beta`, `gantt`, `sequenceDiagram`, etc) for quick visual summaries.
+2. ASCII bars (`█████░░░`) for inline sparkline-style.
+3. Generated image file only if the user provides or explicitly asks for one.
 
-Use markdown tables for per-sample measurements, comparisons, and configuration matrices. Right-align numeric columns, include units in the header, and always include a bold **Avg** / **Total** / **Median** row when the user provided one (or when one is trivially derivable from the given samples — but only arithmetic on the exact numbers provided, no extrapolation).
-
-Example shape (the numbers here are *placeholders for illustration only* — never use them in a real report):
-
-```
-| Sample  | readback (ms) | encode (ms) | total (ms) |
-|---------|--------------:|------------:|-----------:|
-| 1       |        <val> |       <val> |      <val> |
-| 2       |        <val> |       <val> |      <val> |
-| **Avg** |    **<val>** |   **<val>** |  **<val>** |
-```
-
-### Charts
-
-Markdown has no native chart, so use one of these, in order of preference:
-
-1. **Mermaid** fenced blocks (` ```mermaid `) for bar charts, line charts, pie, gantt, sequence, flow — renders in most markdown viewers including GitHub and VS Code. Good default for quick visual summaries of data the user gave you.
-2. **ASCII tables or sparkline-style bars** (`█████░░░`) when the user just wants a rough visual next to the numbers.
-3. **A link to a generated image** (`![...](./charts/<name>.png)`) only if the user explicitly provides the image or asks for one to be generated — never invent a filename that doesn't exist.
-
-Example Mermaid shape (placeholder — replace every value with the user's actual data):
-
-```mermaid
-xychart-beta
-  title "<chart title from user>"
-  x-axis [<label1>, <label2>, <label3>]
-  y-axis "<unit>" 0 --> <max>
-  bar [<val1>, <val2>, <val3>]
-```
-
-### Data integrity checklist (run before writing)
-
-- Every number in the report came from the user's message (or is a transparent arithmetic aggregate of those numbers).
-- Units, precision, and sample count match what the user provided.
+**Data integrity checklist — run before writing:**
+- Every number came from the user's message (or is a transparent arithmetic aggregate of those numbers).
+- Units, precision, and sample count match the user's input.
 - No samples were dropped, reordered, or renamed without noting it.
-- If something was ambiguous, the report says so explicitly instead of picking silently.
-- If any value is missing, stop and ask the user rather than writing a partial table with blanks filled in.
+- Ambiguities are called out in the report; not silently picked.
+- Missing values → stop and ask, not fill.
 
-## Naming guidance
+## Git
 
-- `<report-name>` should describe the topic, not the date or the author. Good: `udp-packet-fragmentation.md`, `bosch-onboarding.md`, `asio-build-fix.md`. Bad: `report1.md`, `2026-04-14.md`, `my-notes.md`.
-- If the user names the report explicitly, use their name verbatim (kebab-case it).
+At the end of every invocation that made edits:
+
+```bash
+cd ~/agent-vault && git add -A && git commit -m "report-agent: <short action>"
+```
+
+Don't push — a SessionEnd hook pushes both `~/agent-vault` and `~/.agents/skills`. Empty commits ("nothing to commit") are not errors — just proceed.
+
+## Rules
+
+- **Every report MUST have a `task:` frontmatter field** pointing to an existing task folder. If none fits, coordinate with `task-manager` to create one first.
+- **Never overwrite** an existing report without confirmation — append a dated subsection instead.
+- **Never invent** numbers, names, or facts.
+- **Don't create a new report** just because the wording is different — prefer appending if the topic matches.
+- **Keep `OVERVIEW.md` and the parent task's `reports:` list in sync on every write.**
+- **Report names:** kebab-case, topic-describing. No dates as names, no `report1.md`.
+- **Absolute dates only** ("2026-04-24", never "yesterday").
