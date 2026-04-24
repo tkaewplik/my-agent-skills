@@ -20,13 +20,15 @@ Maintain the user's working memory at `~/agent-vault/`. Three data areas: `diari
 ├── OVERVIEW.md                     # top-level index
 ├── diaries/
 │   ├── MEMORY.md                   # ≤500 words: last 3 days + tasks in flight
-│   ├── OVERVIEW.md                 # per-day index (newest on top)
+│   ├── OVERVIEW.md                 # last-7-days per-day index (newest on top)
+│   ├── archive/YYYY-MM-OVERVIEW.md # older days, sharded by calendar month
 │   ├── daily/   YYYY-MM-DD.md
 │   ├── weekly/  YYYY-Www.md        # ISO week
 │   └── monthly/ YYYY-MM.md
 └── tasks/
     ├── MEMORY.md                   # ≤500 words: active tasks + top open items
     ├── OVERVIEW.md                 # per-task index (ongoing + done tables)
+    ├── OPEN.md                     # flat list of every open item across ongoing tasks
     ├── ongoing/<task-name>/
     │   ├── OVERVIEW.md             # task dashboard (frontmatter + open items + reports)
     │   ├── notes/                  # optional raw notes
@@ -39,11 +41,31 @@ Maintain the user's working memory at `~/agent-vault/`. Three data areas: `diari
 Any question about "what did I do", "what's next", "do I remember X" — follow this order, stop as soon as you have the answer:
 
 1. **`tasks/MEMORY.md`** and **`diaries/MEMORY.md`** (small, always load first).
-2. If unanswered and question is about history/trends: **`diaries/OVERVIEW.md`** or **`tasks/OVERVIEW.md`** (grep, don't read whole).
-3. If unanswered: the specific **`daily/YYYY-MM-DD.md`** or **`ongoing/<task>/OVERVIEW.md`** file.
-4. If still unanswered: raw files under `notes/` or `data/` of a task.
+2. For "what's next / what's still open" across everything: **`tasks/OPEN.md`** (flat, grouped by priority).
+3. If unanswered and question is about history/trends: **`diaries/OVERVIEW.md`** (last 7 days) or **`tasks/OVERVIEW.md`** (grep, don't read whole).
+4. For older days: **`diaries/archive/YYYY-MM-OVERVIEW.md`** (grep by month).
+5. If unanswered: the specific **`daily/YYYY-MM-DD.md`** or **`ongoing/<task>/OVERVIEW.md`** file.
+6. If still unanswered: raw files under `notes/` or `data/` of a task.
 
-Don't read every daily or every task — grep the OVERVIEW, then open one file.
+Don't read every daily or every task — grep OPEN.md / the relevant OVERVIEW.md, then open one file.
+
+### Greppable YAML fields
+
+OVERVIEW blocks expose their list-like fields as YAML flow sequences so you can grep by field without reading prose. Example:
+
+```
+## 2026-04-24
+tags: [denis, status, gdextension]
+tasks_touched: [hevc-gdextension-migration, denis-2-client-streaming]
+keywords: [Denis update, GDExtension migration, target PC]
+**Done:** <prose…>
+```
+
+Grep patterns:
+- `^tags: ` / `^keywords: ` / `^tasks_touched: ` — find the field line.
+- Combined: `grep -n '^keywords:.*GDExtension' diaries/OVERVIEW.md`.
+
+Apply the same format to `reports/OVERVIEW.md` keyword lines (owned by `report-agent`).
 
 ## Daily diary format (new format, 2026-04-24 onward)
 
@@ -62,6 +84,20 @@ notes: |
 ```
 
 **No `todo:` field.** Open todos live on each task's `OVERVIEW.md`. The daily is an event log, not a backlog.
+
+### OVERVIEW.md block format (diaries/OVERVIEW.md and archives)
+
+Each day block mirrors the list-like frontmatter fields as YAML flow sequences — greppable by field without the parser reading prose:
+
+```
+## YYYY-MM-DD
+tags: [short, distinctive, keywords]
+tasks_touched: [task-a, task-b]
+**Done:** <prose summarizing what happened…>
+keywords: [grep-friendly, distinctive, phrases]
+```
+
+Fields `tags`, `tasks_touched`, `keywords` are YAML flow sequences (comma-separated inside `[...]`). Long prose (`**Done:**`, `**Todo carryover:**` on legacy blocks) stays as markdown bold-prefixed prose — don't try to YAML-ify it.
 
 ## Tasks folder format
 
@@ -95,9 +131,10 @@ Body sections: `## Why`, `## Status`, `## Open items` (checklist of what's left)
    - Bump `diaries:` frontmatter to include today's date.
 5. **Hybrid task creation (type C rule):** if the news introduces a long-lived work item that doesn't fit any existing task, **suggest** creating a new task folder — don't auto-create. Ask: "Looks like `<short description>` is a new long-lived task — want me to create `tasks/ongoing/<kebab-name>/`?"
 6. Refresh `diaries/MEMORY.md` and `tasks/MEMORY.md` (see "MEMORY.md maintenance" below).
-7. Refresh `diaries/OVERVIEW.md` and `tasks/OVERVIEW.md` blocks for what changed.
-8. **Commit** (see "Git" section).
-9. Present the Task Summary (format below).
+7. Refresh `diaries/OVERVIEW.md` (shard window — see "Historical-diaries sharding"). Refresh `tasks/OVERVIEW.md` blocks for what changed.
+8. **Rebuild `tasks/OPEN.md`** if any task's open-items changed (see "OPEN.md maintenance").
+9. **Commit** (see "Git" section).
+10. Present the Task Summary (format below).
 
 ### Starting a new task (explicit)
 
@@ -107,28 +144,33 @@ User says "start a task on X" / "create a task for Y":
 2. `mkdir -p ~/agent-vault/tasks/ongoing/<name>/`.
 3. Write `OVERVIEW.md` with frontmatter + `## Why` + `## Status` + `## Open items`.
 4. Append a new block to `tasks/OVERVIEW.md` Ongoing table.
-5. Refresh `tasks/MEMORY.md`.
-6. Commit.
+5. Rebuild `tasks/OPEN.md` (new section for this task).
+6. Refresh `tasks/MEMORY.md`.
+7. Commit.
 
 ### Closing a task
 
 User says "close the X task" / "mark X done":
 
 1. `git mv ~/agent-vault/tasks/ongoing/<name>/ ~/agent-vault/tasks/done/<name>/`.
-2. Update the task's `OVERVIEW.md` frontmatter: `status: done`, `closed: YYYY-MM-DD`. Add a `## Outcome` section (ask the user for the one-line result if not obvious).
+2. **Compact** the task's `OVERVIEW.md`:
+   - Frontmatter: `status: done`, `closed: YYYY-MM-DD`, `priority: done`.
+   - Keep `## Why` (one paragraph), `## Status` (one line — "Closed YYYY-MM-DD, kept for reference"), `## Outcome` (ask the user for the one-line result if not obvious), and `## Reports` (links only).
+   - **Drop `## Open items`** — it's no longer relevant once closed. Don't preserve history; the diaries already capture the journey.
 3. Move the row in `tasks/OVERVIEW.md` from Ongoing to Done.
-4. Refresh `tasks/MEMORY.md`.
-5. Commit.
+4. Remove this task's section from `tasks/OPEN.md` (see OPEN.md maintenance below).
+5. Refresh `tasks/MEMORY.md`.
+6. Commit.
 
 ### "Update tasks" — todo reconciliation
 
 When the user says "update tasks", do NOT silently rewrite:
 
-1. Read each ongoing task's `## Open items`.
+1. Read `tasks/OPEN.md` (fast, pre-aggregated). If absent or stale, fall back to each ongoing task's `## Open items`.
 2. If ≤5 open items total across tasks, ask per-item. If more, group by task and ask which tasks have progress.
 3. Wait for answers.
 4. For each confirmed-done item, move it to `## Resolved` on its task (with one-line outcome if user provided).
-5. Refresh MEMORY and OVERVIEW files.
+5. Rebuild `tasks/OPEN.md` and refresh MEMORY + OVERVIEW files.
 6. Commit.
 
 ### Weekly / monthly rollup
@@ -139,6 +181,57 @@ User says "summarize this week" / "summarize April":
 - **Monthly:** write `diaries/monthly/YYYY-MM.md` aggregating the month's weeklies. Keep under ~600 words.
 - Commit.
 
+## OPEN.md maintenance (tasks/OPEN.md)
+
+`tasks/OPEN.md` is a pre-aggregated, flat list of every `## Open items` bullet across all `tasks/ongoing/*/OVERVIEW.md` files. The agent greps it to answer "what's next" without opening every task OVERVIEW.
+
+**Rebuild OPEN.md on any write that touches an ongoing task's open items** — new open item added, item resolved/struck, task created, task closed. Read-only turns do NOT rebuild it (see "Read-only turns" below).
+
+**Structure (enforce on rebuild):**
+
+```markdown
+---
+updated: YYYY-MM-DD
+---
+
+# Open items — all ongoing tasks
+
+<one-paragraph pointer explaining this is the aggregate>
+
+## High
+
+### <task-name> (<owner>, <status qualifier e.g. blocked> · created YYYY-MM-DD)
+- [ ] <open-item verbatim from the task's OVERVIEW>
+
+### <next task>
+...
+
+## Medium
+...
+
+## Low
+...
+```
+
+Rules:
+- Transcribe `## Open items` bullets verbatim — do not paraphrase.
+- Group by `priority` frontmatter field (high → medium → low). Within a priority, order by `created` date descending (newest first).
+- Closed tasks are NOT listed. If a task moves to `done/`, remove its section.
+- Skip listing a priority heading if zero tasks fall under it.
+
+When OPEN.md gets rebuilt, include it in the same commit as the task change (same turn).
+
+## Historical-diaries sharding (diaries/OVERVIEW.md)
+
+`diaries/OVERVIEW.md` holds the **7 most recent dates**. Older day blocks live in `diaries/archive/YYYY-MM-OVERVIEW.md`, one file per calendar month.
+
+**On every new daily write, roll the window:**
+1. Insert the new day's block at the top of `diaries/OVERVIEW.md`.
+2. If that push makes more than 7 blocks: pop the oldest block and append it to `diaries/archive/<its YYYY-MM>-OVERVIEW.md` (create the archive file with a standard header if it doesn't exist; keep archive blocks newest-first within the file).
+3. The `## Archives` list at the top of `OVERVIEW.md` should enumerate existing archive files with block counts.
+
+Grep path for historical diary questions: MEMORY → OVERVIEW (last 7) → relevant `archive/YYYY-MM-OVERVIEW.md` → specific `daily/YYYY-MM-DD.md`.
+
 ## MEMORY.md maintenance (≤500 words each, HARD CAP)
 
 Three MEMORY.md files to keep fresh:
@@ -146,7 +239,7 @@ Three MEMORY.md files to keep fresh:
 - `tasks/MEMORY.md` — active tasks list + top 5 open items across all tasks.
 - (optional) `~/agent-vault/MEMORY.md` — global, if useful.
 
-Rebuild at end of every turn that changed tasks or diaries. Fail loudly (refuse to write) if a MEMORY.md would exceed 500 words — trim older entries instead.
+**Rebuild only on turns that actually changed files** (see "Read-only turns" below). Fail loudly (refuse to write) if a MEMORY.md would exceed 500 words — trim older entries instead.
 
 Template:
 
@@ -161,9 +254,21 @@ updated: YYYY-MM-DD
 - ...
 ```
 
+## Read-only turns — skip rebuild + commit
+
+If the turn answered a question without writing anything (no edit, create, move, or delete under `diaries/` or `tasks/`), **skip**:
+- MEMORY.md regeneration,
+- OVERVIEW.md touch-ups,
+- OPEN.md rebuild,
+- the git commit.
+
+Detect this by checking `git status --porcelain` in `~/agent-vault/` before committing — empty output ⇒ read-only ⇒ no commit, no MEMORY rebuild. Look-ups and explanations cost nothing on disk; keep it that way.
+
+Commit message discipline for write turns: prefer short, noun-first, under ~60 chars. Good: `task-manager: note Denis update on hevc-migration`. Bad: `task-manager: I updated the hevc-gdextension-migration task with Denis's latest comment and refreshed MEMORY.md`.
+
 ## Git
 
-At the end of every invocation that made edits:
+At the end of every invocation that made edits (skipped if read-only — see above):
 
 ```bash
 cd ~/agent-vault && git add -A && git commit -m "task-manager: <short action>"

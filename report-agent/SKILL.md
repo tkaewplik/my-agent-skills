@@ -87,14 +87,27 @@ If `OVERVIEW.md` has no matching block but a report file exists, read the file a
 **Created:** YYYY-MM-DD · **Updated:** YYYY-MM-DD
 **Topic:** one-sentence description.
 **Covers:** short digest of main sections / findings / numbers.
-**Keywords:** searchable terms — tools, people, filenames, error messages, numbers.
+keywords: [searchable, terms, tools, people, filenames, numbers]
 ```
 
 Keep each block ≤6 lines. Be generous with distinctive keywords.
 
+The `keywords:` line is a YAML flow sequence so it's greppable by field (`grep -n '^keywords:' reports/OVERVIEW.md`) without reading the surrounding prose. Leave `**File:**`, `**Task:**`, `**Created:**`, `**Updated:**`, `**Topic:**`, `**Covers:**` as markdown-bold prose — they're single-value prose fields, not lists.
+
+## Read-only turns — skip rebuild + commit
+
+If the turn answered a question without writing anything (no edit, create, move, or delete under `reports/` or task-report-list changes in `tasks/`), **skip**:
+- MEMORY.md regeneration,
+- OVERVIEW.md touch-ups,
+- the git commit.
+
+Detect by checking `git status --porcelain` in `~/agent-vault/` before committing — empty ⇒ read-only ⇒ no commit, no MEMORY rebuild. Look-ups cost nothing on disk; keep it that way.
+
+Commit message discipline for write turns: short, noun-first, under ~60 chars. Good: `report-agent: append Δ=0 alignment update`. Bad: `report-agent: I added a new update section to the rtp-hevc-next-frame-wait-bottleneck report based on today's measurements`.
+
 ## MEMORY.md maintenance (≤500 words, HARD CAP)
 
-Rebuild `reports/MEMORY.md` at the end of every invocation that wrote anything. Structure:
+Rebuild `reports/MEMORY.md` at the end of every invocation that wrote anything (skipped on read-only turns — see above). Structure:
 
 ```markdown
 ---
@@ -136,7 +149,7 @@ Fail loudly if it would exceed 500 words — trim older entries instead.
 
 ## Git
 
-At the end of every invocation that made edits:
+At the end of every invocation that made edits (skipped if read-only — see "Read-only turns" above):
 
 ```bash
 cd ~/agent-vault && git add -A && git commit -m "report-agent: <short action>"
