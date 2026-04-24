@@ -93,3 +93,23 @@ When the user provides story, narrative, or information about accomplishments an
 4. Update both the YAML frontmatter (`done:` and `todo:` lists) and the markdown narrative sections
 5. **Update `~/diaries/SUMMARY.md`** — refresh (or insert) the block for that date so the index stays in sync
 6. After updating, present the updated Task Summary using the output format above
+
+## "Update tasks" trigger — todo reconciliation
+
+When the user says **"update tasks"** (or any close variant like "update the tasks", "update todos", "reconcile tasks"), do NOT silently rewrite the todo list. Instead, walk through the existing open todos with the user and ask which ones are done.
+
+Workflow:
+
+1. Read the latest diary file and extract its current open `todo:` list.
+2. Decide how to present the list for confirmation:
+   - **Few open todos (≤5):** ask about each one individually — one bullet per todo, yes/no/partial. Example: "Is `(Putti-san) 4-camera framerate drop` done? If yes, what was the result so I can move it to done?"
+   - **Many open todos (>5):** don't spam the user with a long per-item checklist. Summarize them into logical groups (e.g. "Putti-san requests", "streaming pipeline work", "carryover research") and ask the user which group(s) have progress to report, then drill into just those.
+3. Wait for the user's answers before editing any file.
+4. Once the user confirms which todos are done (and gives any result/context for them), move those items from `todo:` to `done:` in the diary frontmatter, update the narrative sections accordingly, and refresh `~/diaries/SUMMARY.md`.
+5. Present the updated Task Summary using the standard output format.
+
+Rules:
+
+- Never assume a todo is done without explicit user confirmation.
+- Never invent a result to put next to a moved todo — if the user says "done" without detail, either ask for the one-line result or move it with no extra text rather than fabricating one.
+- If the user only answers about some items, leave the rest in `todo:` untouched.
