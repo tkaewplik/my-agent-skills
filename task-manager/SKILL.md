@@ -20,8 +20,8 @@ Maintain the user's working memory at `~/agent-vault/`. Three data areas: `diari
 ├── OVERVIEW.md                     # top-level index
 ├── diaries/
 │   ├── MEMORY.md                   # ≤500 words: last 3 days + tasks in flight
-│   ├── OVERVIEW.md                 # last-7-days per-day index (newest on top)
-│   ├── archive/YYYY-MM-OVERVIEW.md # older days, sharded by calendar month
+│   ├── OVERVIEW.md                 # per-day index, newest on top (append-only — no rolling window)
+│   ├── archive/YYYY-MM-OVERVIEW.md # batch-archived months (only via explicit "archive YYYY-MM" / monthly rollup)
 │   ├── daily/   YYYY-MM-DD.md
 │   ├── weekly/  YYYY-Www.md        # ISO week
 │   └── monthly/ YYYY-MM.md
@@ -42,12 +42,14 @@ Any question about "what did I do", "what's next", "do I remember X" — follow 
 
 1. **`tasks/MEMORY.md`** and **`diaries/MEMORY.md`** (small, always load first).
 2. For "what's next / what's still open" across everything: **`tasks/OPEN.md`** (flat, grouped by priority).
-3. If unanswered and question is about history/trends: **`diaries/OVERVIEW.md`** (last 7 days) or **`tasks/OVERVIEW.md`** (grep, don't read whole).
-4. For older days: **`diaries/archive/YYYY-MM-OVERVIEW.md`** (grep by month).
+3. If unanswered and question is about history/trends: **`diaries/OVERVIEW.md`** (grep, don't read whole) or **`tasks/OVERVIEW.md`** (grep, don't read whole).
+4. For dates already batch-archived out of OVERVIEW.md: **`diaries/archive/YYYY-MM-OVERVIEW.md`** (grep by month).
 5. If unanswered: the specific **`daily/YYYY-MM-DD.md`** or **`ongoing/<task>/OVERVIEW.md`** file.
 6. If still unanswered: raw files under `notes/` or `data/` of a task.
 
 Don't read every daily or every task — grep OPEN.md / the relevant OVERVIEW.md, then open one file.
+
+**Note on staleness:** if recent activity used the Quick-note fast path (see Workflows below), `MEMORY.md` and `tasks/OPEN.md` may not yet reflect the last few entries. When answering "what did I do today" / "what's next", also peek at today's `daily/YYYY-MM-DD.md` to catch quick-notes.
 
 ### Greppable YAML fields
 
@@ -66,6 +68,17 @@ Grep patterns:
 - Combined: `grep -n '^keywords:.*GDExtension' diaries/OVERVIEW.md`.
 
 Apply the same format to `reports/OVERVIEW.md` keyword lines (owned by `report-agent`).
+
+## Tool-call batching (mandatory)
+
+Each workflow step that involves multiple file operations MUST issue them as **a single message with parallel tool calls** when there are no dependencies between them. Sequential issuance is only acceptable when one call's output is required input for the next.
+
+Examples:
+- "Load `tasks/MEMORY.md` and `diaries/MEMORY.md`" → **one message, two Read calls in parallel**.
+- "Append to today's daily + edit task A's OVERVIEW + edit task B's OVERVIEW" (independent files) → **one message, three calls in parallel**.
+- Reads-then-writes: reads in one parallel batch; writes in a second parallel batch; commit serial after writes.
+
+This is purely a wall-clock optimization — same files, same content, fewer round-trips.
 
 ## Daily diary format (new format, 2026-04-24 onward)
 
@@ -112,26 +125,43 @@ closed: null        # or: YYYY-MM-DD
 owner_request: <who asked — self, Denis, Putti-san, team social, etc>
 priority: high      # high | medium | low
 reports: [<report-name-without-extension>, ...]
-diaries: [YYYY-MM-DD, ...]
 ---
 ```
 
 Body sections: `## Why`, `## Status`, `## Open items` (checklist of what's left), `## Reports` (links).
 
+To find which dailies touched task X: `grep -l 'tasks_touched:.*<task-name>' diaries/daily/*.md` — no parallel `diaries:` list is maintained on the task (removed to cut per-update write cost).
+
 ## Workflows
 
-### When the user shares something new in chat (the "Diary Update Feature")
+### Quick note (fast path) — DEFAULT for one-off chat updates
 
-1. Load `tasks/MEMORY.md` and `diaries/MEMORY.md`.
+Most chat updates are small event logs that don't change task lifecycle. Use this fast path **unless** the update:
+- creates or closes a task,
+- changes a task's `priority`,
+- adds or resolves an Open item on a task.
+
+Fast-path steps:
+1. Append to today's `daily/YYYY-MM-DD.md` (create if missing) — add a bullet to `done:` and any new task names to `tasks_touched:`.
+2. **Commit**.
+
+Skip MEMORY rebuild, OPEN.md rebuild, and `diaries/OVERVIEW.md` block insertion. Those are brought back in sync the next time a full workflow runs (task create/close, "update tasks" reconciliation, weekly/monthly rollup), or when the user explicitly says "refresh views" / "rebuild memory" / "/sync".
+
+If the update DOES touch lifecycle / priority / open items → fall through to the full "Diary Update" workflow below.
+
+### When the user shares something new in chat (the "Diary Update Feature") — full workflow
+
+Run this workflow when the update is **not** a Quick note (above) — i.e. it creates/closes a task, changes priority, or adds/resolves an Open item.
+
+1. Load `tasks/MEMORY.md` and `diaries/MEMORY.md` (only if you don't already know which task is being touched).
 2. Decide which existing tasks this information touches (check tags/names — Denis, Putti-san, rendering, HEVC, BBQ, etc).
 3. Append to today's `daily/YYYY-MM-DD.md` (create if missing). Record the event in `done:` and add task names to `tasks_touched:`.
 4. Update each touched task's `OVERVIEW.md`:
    - Append new open items to the task's `## Open items` section if the news introduces new work.
    - If a todo in that task is now done (based on what the user said), strike it or move it to a `## Resolved` section with the outcome.
-   - Bump `diaries:` frontmatter to include today's date.
 5. **Hybrid task creation (type C rule):** if the news introduces a long-lived work item that doesn't fit any existing task, **suggest** creating a new task folder — don't auto-create. Ask: "Looks like `<short description>` is a new long-lived task — want me to create `tasks/ongoing/<kebab-name>/`?"
 6. Refresh `diaries/MEMORY.md` and `tasks/MEMORY.md` (see "MEMORY.md maintenance" below).
-7. Refresh `diaries/OVERVIEW.md` (shard window — see "Historical-diaries sharding"). Refresh `tasks/OVERVIEW.md` blocks for what changed.
+7. Refresh `diaries/OVERVIEW.md` (insert new block at top — append-only, no rolling-window logic). Refresh `tasks/OVERVIEW.md` blocks for what changed.
 8. **Rebuild `tasks/OPEN.md`** if any task's open-items changed (see "OPEN.md maintenance").
 9. **Commit** (see "Git" section).
 10. Present the Task Summary (format below).
@@ -173,19 +203,21 @@ When the user says "update tasks", do NOT silently rewrite:
 5. Rebuild `tasks/OPEN.md` and refresh MEMORY + OVERVIEW files.
 6. Commit.
 
-### Weekly / monthly rollup
+### Weekly / monthly rollup + archive
 
-User says "summarize this week" / "summarize April":
+User says "summarize this week" / "summarize April" / "archive April 2026" / "refresh views" / "/sync":
 
 - **Weekly:** determine ISO week. Write `diaries/weekly/YYYY-Www.md` summarizing the 7 days: tasks that shipped, tasks that started, stuck items, top 3 decisions. Link to daily files. Keep under ~400 words.
 - **Monthly:** write `diaries/monthly/YYYY-MM.md` aggregating the month's weeklies. Keep under ~600 words.
+- **Archive:** when the user explicitly asks (or as part of monthly rollup), move that month's day-blocks from `diaries/OVERVIEW.md` to `diaries/archive/YYYY-MM-OVERVIEW.md` (newest-first within the archive file, with a standard header if creating it). This is the **only** time blocks leave OVERVIEW.md.
+- **Refresh views (`/sync`):** rebuild MEMORY files, OPEN.md, and add today's diary block to OVERVIEW.md if it isn't there yet. Use this when Quick-note fast-path turns have left views stale.
 - Commit.
 
 ## OPEN.md maintenance (tasks/OPEN.md)
 
 `tasks/OPEN.md` is a pre-aggregated, flat list of every `## Open items` bullet across all `tasks/ongoing/*/OVERVIEW.md` files. The agent greps it to answer "what's next" without opening every task OVERVIEW.
 
-**Rebuild OPEN.md on any write that touches an ongoing task's open items** — new open item added, item resolved/struck, task created, task closed. Read-only turns do NOT rebuild it (see "Read-only turns" below).
+**Rebuild OPEN.md only on full Diary Update / lifecycle workflows that touch open items** — new open item added, item resolved/struck, task created, task closed. Quick-note and read-only turns do NOT rebuild it.
 
 **Structure (enforce on rebuild):**
 
@@ -221,16 +253,13 @@ Rules:
 
 When OPEN.md gets rebuilt, include it in the same commit as the task change (same turn).
 
-## Historical-diaries sharding (diaries/OVERVIEW.md)
+## Diary OVERVIEW archiving (batch, not per-write)
 
-`diaries/OVERVIEW.md` holds the **7 most recent dates**. Older day blocks live in `diaries/archive/YYYY-MM-OVERVIEW.md`, one file per calendar month.
+`diaries/OVERVIEW.md` is **append-only newest-first** during normal operation. New day blocks go at the top; **never roll old blocks to the archive on a regular write turn**. The 7-day rolling window has been removed (was per-write overhead).
 
-**On every new daily write, roll the window:**
-1. Insert the new day's block at the top of `diaries/OVERVIEW.md`.
-2. If that push makes more than 7 blocks: pop the oldest block and append it to `diaries/archive/<its YYYY-MM>-OVERVIEW.md` (create the archive file with a standard header if it doesn't exist; keep archive blocks newest-first within the file).
-3. The `## Archives` list at the top of `OVERVIEW.md` should enumerate existing archive files with block counts.
+Archives at `diaries/archive/YYYY-MM-OVERVIEW.md` exist for historical batches written before this change, and for explicit user-driven archival ("archive April 2026", "summarize this month"). On those explicit asks, move the targeted blocks from OVERVIEW.md to the archive file in one batch (newest-first within the archive file, with a standard header if creating it).
 
-Grep path for historical diary questions: MEMORY → OVERVIEW (last 7) → relevant `archive/YYYY-MM-OVERVIEW.md` → specific `daily/YYYY-MM-DD.md`.
+Grep path for historical questions: MEMORY → `diaries/OVERVIEW.md` → `diaries/archive/YYYY-MM-OVERVIEW.md` (only for batches you explicitly archived) → specific `daily/YYYY-MM-DD.md`.
 
 ## MEMORY.md maintenance (≤500 words each, HARD CAP)
 
@@ -239,7 +268,7 @@ Three MEMORY.md files to keep fresh:
 - `tasks/MEMORY.md` — active tasks list + top 5 open items across all tasks.
 - (optional) `~/agent-vault/MEMORY.md` — global, if useful.
 
-**Rebuild only on turns that actually changed files** (see "Read-only turns" below). Fail loudly (refuse to write) if a MEMORY.md would exceed 500 words — trim older entries instead.
+**Rebuild only on turns that ran a full Diary Update / task lifecycle workflow** (Quick-note turns and read-only turns both skip MEMORY rebuild — see "Read-only turns" and "Quick note (fast path)" above). Fail loudly (refuse to write) if a MEMORY.md would exceed 500 words — trim older entries instead.
 
 Template:
 

@@ -50,6 +50,17 @@ Below the frontmatter, shape the content around what the user gave — headings,
 3. Open only that file.
 4. If the question is about a task's reports collectively: look at the task's `OVERVIEW.md` under `## Reports` instead.
 
+## Tool-call batching (mandatory)
+
+Each workflow step that involves multiple file operations MUST issue them as **a single message with parallel tool calls** when there are no dependencies between them. Sequential issuance is only acceptable when one call's output is required input for the next.
+
+Examples:
+- "Load `reports/MEMORY.md` and `tasks/MEMORY.md`" → **one message, two Read calls in parallel**.
+- "Write the new report + edit the parent task's OVERVIEW + edit reports/OVERVIEW.md + write reports/MEMORY.md" (independent files) → **one message, four calls in parallel**.
+- Reads-then-writes: reads in one parallel batch; writes in a second parallel batch; commit serial after writes.
+
+This is purely a wall-clock optimization — same files, same content, fewer round-trips.
+
 ## Workflows
 
 ### Adding information / creating a report
