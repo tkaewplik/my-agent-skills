@@ -5,7 +5,8 @@ description: >
   (ongoing vs done), weekly/monthly rollups, and the tasks MEMORY.md fast-catch-up file. Use this
   whenever the user asks about their tasks, progress, plan, what to do next, what they did today,
   or references their diary. Also trigger on "update tasks", "close the X task", "start a task on
-  Y", "summarize this week", "summarize this month". Each invocation commits its edits to git.
+  Y", "summarize this week", "summarize this month", "rebuild memory", "refresh views",
+  "rebuild views". Each invocation commits its edits to git.
 ---
 
 # Task Manager
@@ -124,11 +125,12 @@ created: YYYY-MM-DD
 closed: null        # or: YYYY-MM-DD
 owner_request: <who asked — self, Denis, Putti-san, team social, etc>
 priority: high      # high | medium | low
+qualifier: blocked  # OPTIONAL — short word shown in OPEN.md / OVERVIEW.md (e.g. blocked, deprioritized, waiting). Omit if none.
 reports: [<report-name-without-extension>, ...]
 ---
 ```
 
-Body sections: `## Why`, `## Status`, `## Open items` (checklist of what's left), `## Reports` (links).
+Body sections: `## Why`, `## Status`, `## Open items` (checklist of what's left — plain `- ` bullets, no checkboxes; the rebuild script adds `[ ]`), `## Reports` (links).
 
 To find which dailies touched task X: `grep -l 'tasks_touched:.*<task-name>' diaries/daily/*.md` — no parallel `diaries:` list is maintained on the task (removed to cut per-update write cost).
 
@@ -145,7 +147,7 @@ Fast-path steps:
 1. Append to today's `daily/YYYY-MM-DD.md` (create if missing) — add a bullet to `done:` and any new task names to `tasks_touched:`.
 2. **Commit**.
 
-Skip MEMORY rebuild, OPEN.md rebuild, and `diaries/OVERVIEW.md` block insertion. Those are brought back in sync the next time a full workflow runs (task create/close, "update tasks" reconciliation, weekly/monthly rollup), or when the user explicitly says "refresh views" / "rebuild memory" / "/sync".
+Skip MEMORY rebuild, OPEN.md rebuild, and `diaries/OVERVIEW.md` block insertion. Those are brought back in sync the next time a full workflow runs (task create/close, "update tasks" reconciliation, weekly/monthly rollup), or when the user explicitly says "rebuild memory" / "refresh views" / "rebuild views".
 
 If the update DOES touch lifecycle / priority / open items → fall through to the full "Diary Update" workflow below.
 
@@ -161,8 +163,8 @@ Run this workflow when the update is **not** a Quick note (above) — i.e. it cr
    - If a todo in that task is now done (based on what the user said), strike it or move it to a `## Resolved` section with the outcome.
 5. **Hybrid task creation (type C rule):** if the news introduces a long-lived work item that doesn't fit any existing task, **suggest** creating a new task folder — don't auto-create. Ask: "Looks like `<short description>` is a new long-lived task — want me to create `tasks/ongoing/<kebab-name>/`?"
 6. Refresh `diaries/MEMORY.md` and `tasks/MEMORY.md` (see "MEMORY.md maintenance" below).
-7. Refresh `diaries/OVERVIEW.md` (insert new block at top — append-only, no rolling-window logic). Refresh `tasks/OVERVIEW.md` blocks for what changed.
-8. **Rebuild `tasks/OPEN.md`** if any task's open-items changed (see "OPEN.md maintenance").
+7. Refresh `diaries/OVERVIEW.md` (insert new block at top — append-only, no rolling-window logic). The polished `**Done:**` prose is agent-written; the rebuild script can write a first-draft block from the daily's `done:` bullets if needed.
+8. **Run `python3 scripts/rebuild_views.py`** — regenerates `tasks/OPEN.md`, `tasks/OVERVIEW.md`, and inserts today's `diaries/OVERVIEW.md` block if missing. One bash call replaces several hand-authored full-file rewrites.
 9. **Commit** (see "Git" section).
 10. Present the Task Summary (format below).
 
@@ -173,10 +175,9 @@ User says "start a task on X" / "create a task for Y":
 1. Pick a kebab-case name (descriptive, not dated).
 2. `mkdir -p ~/agent-vault/tasks/ongoing/<name>/`.
 3. Write `OVERVIEW.md` with frontmatter + `## Why` + `## Status` + `## Open items`.
-4. Append a new block to `tasks/OVERVIEW.md` Ongoing table.
-5. Rebuild `tasks/OPEN.md` (new section for this task).
-6. Refresh `tasks/MEMORY.md`.
-7. Commit.
+4. Run `python3 scripts/rebuild_views.py` (rebuilds `tasks/OVERVIEW.md` table and `tasks/OPEN.md`).
+5. Refresh `tasks/MEMORY.md` (agent prose).
+6. Commit.
 
 ### Closing a task
 
@@ -184,13 +185,12 @@ User says "close the X task" / "mark X done":
 
 1. `git mv ~/agent-vault/tasks/ongoing/<name>/ ~/agent-vault/tasks/done/<name>/`.
 2. **Compact** the task's `OVERVIEW.md`:
-   - Frontmatter: `status: done`, `closed: YYYY-MM-DD`, `priority: done`.
+   - Frontmatter: `status: done`, `closed: YYYY-MM-DD`, `priority: done`. Drop `qualifier:` if present.
    - Keep `## Why` (one paragraph), `## Status` (one line — "Closed YYYY-MM-DD, kept for reference"), `## Outcome` (ask the user for the one-line result if not obvious), and `## Reports` (links only).
    - **Drop `## Open items`** — it's no longer relevant once closed. Don't preserve history; the diaries already capture the journey.
-3. Move the row in `tasks/OVERVIEW.md` from Ongoing to Done.
-4. Remove this task's section from `tasks/OPEN.md` (see OPEN.md maintenance below).
-5. Refresh `tasks/MEMORY.md`.
-6. Commit.
+3. Run `python3 scripts/rebuild_views.py` (moves the row in `tasks/OVERVIEW.md` and drops the task's section from `tasks/OPEN.md`).
+4. Refresh `tasks/MEMORY.md` (agent prose).
+5. Commit.
 
 ### "Update tasks" — todo reconciliation
 
@@ -200,58 +200,42 @@ When the user says "update tasks", do NOT silently rewrite:
 2. If ≤5 open items total across tasks, ask per-item. If more, group by task and ask which tasks have progress.
 3. Wait for answers.
 4. For each confirmed-done item, move it to `## Resolved` on its task (with one-line outcome if user provided).
-5. Rebuild `tasks/OPEN.md` and refresh MEMORY + OVERVIEW files.
+5. Run `python3 scripts/rebuild_views.py`. Refresh `tasks/MEMORY.md` (agent prose) if active-task list or top-5 changed.
 6. Commit.
 
 ### Weekly / monthly rollup + archive
 
-User says "summarize this week" / "summarize April" / "archive April 2026" / "refresh views" / "/sync":
+User says "summarize this week" / "summarize April" / "archive April 2026":
 
 - **Weekly:** determine ISO week. Write `diaries/weekly/YYYY-Www.md` summarizing the 7 days: tasks that shipped, tasks that started, stuck items, top 3 decisions. Link to daily files. Keep under ~400 words.
 - **Monthly:** write `diaries/monthly/YYYY-MM.md` aggregating the month's weeklies. Keep under ~600 words.
 - **Archive:** when the user explicitly asks (or as part of monthly rollup), move that month's day-blocks from `diaries/OVERVIEW.md` to `diaries/archive/YYYY-MM-OVERVIEW.md` (newest-first within the archive file, with a standard header if creating it). This is the **only** time blocks leave OVERVIEW.md.
-- **Refresh views (`/sync`):** rebuild MEMORY files, OPEN.md, and add today's diary block to OVERVIEW.md if it isn't there yet. Use this when Quick-note fast-path turns have left views stale.
 - Commit.
 
-## OPEN.md maintenance (tasks/OPEN.md)
+### Rebuild memory / Refresh views
 
-`tasks/OPEN.md` is a pre-aggregated, flat list of every `## Open items` bullet across all `tasks/ongoing/*/OVERVIEW.md` files. The agent greps it to answer "what's next" without opening every task OVERVIEW.
+User says "rebuild memory" / "refresh views" / "rebuild views" — typically used after a stretch of Quick-note fast-path turns to bring all views back in sync.
 
-**Rebuild OPEN.md only on full Diary Update / lifecycle workflows that touch open items** — new open item added, item resolved/struck, task created, task closed. Quick-note and read-only turns do NOT rebuild it.
+1. **Run `python3 scripts/rebuild_views.py`** — regenerates `tasks/OPEN.md`, `tasks/OVERVIEW.md`, and ensures today's `diaries/OVERVIEW.md` block exists (script-generated draft if missing).
+2. Polish today's `diaries/OVERVIEW.md` block — replace the script's auto `**Done:**` concatenation with a curated prose summary, fill in distinctive `keywords:`.
+3. Refresh `tasks/MEMORY.md` and `diaries/MEMORY.md` prose (last 3 days, active tasks, top open items — see "MEMORY.md maintenance").
+4. Commit.
 
-**Structure (enforce on rebuild):**
+## OPEN.md / tasks/OVERVIEW.md / diaries/OVERVIEW.md — script-generated
 
-```markdown
----
-updated: YYYY-MM-DD
----
+These three views are regenerated by `scripts/rebuild_views.py` from the source-of-truth files. **Do not hand-author them.** If you find yourself writing OPEN.md or tasks/OVERVIEW.md by hand, stop and run the script instead.
 
-# Open items — all ongoing tasks
+What the script does:
+- `tasks/OPEN.md` — flat aggregate of every `## Open items` bullet from `tasks/ongoing/*/OVERVIEW.md`, grouped by `priority` (high → medium → low), newest `created` first within a priority. Adds `[ ]` checkbox prefix when emitting (sources keep plain `-` bullets). Includes optional `qualifier:` from each task's frontmatter (e.g. `blocked`, `deprioritized`).
+- `tasks/OVERVIEW.md` — Ongoing table (priority, created desc) + Done table (closed desc), with report counts derived from each task's `reports:` frontmatter list.
+- `diaries/OVERVIEW.md` — only inserts today's block at the top **if** today's daily exists and the block isn't already present. The auto-generated `**Done:**` concatenates the daily's `done:` bullets verbatim; the agent should replace it with curated prose during full-workflow turns.
 
-<one-paragraph pointer explaining this is the aggregate>
+What the script does **not** do:
+- Touch `MEMORY.md` files (prose summaries — agent's job).
+- Touch existing day-blocks in `diaries/OVERVIEW.md` (append-only).
+- Move blocks to archives.
 
-## High
-
-### <task-name> (<owner>, <status qualifier e.g. blocked> · created YYYY-MM-DD)
-- [ ] <open-item verbatim from the task's OVERVIEW>
-
-### <next task>
-...
-
-## Medium
-...
-
-## Low
-...
-```
-
-Rules:
-- Transcribe `## Open items` bullets verbatim — do not paraphrase.
-- Group by `priority` frontmatter field (high → medium → low). Within a priority, order by `created` date descending (newest first).
-- Closed tasks are NOT listed. If a task moves to `done/`, remove its section.
-- Skip listing a priority heading if zero tasks fall under it.
-
-When OPEN.md gets rebuilt, include it in the same commit as the task change (same turn).
+When the script runs, include its output files in the same commit as the source change (same turn).
 
 ## Diary OVERVIEW archiving (batch, not per-write)
 
